@@ -1,0 +1,57 @@
+{
+  "name": "pi-dashboard-multi-account-plugin",
+  "version": "0.1.0",
+  "description": "Private pi-dashboard settings companion for pi-multi-account",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-dashboard-plugin",
+    "multi-account",
+    "anthropic",
+    "oauth"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "pi-dashboard-plugin": {
+    "id": "multi-account",
+    "displayName": "Multi Account",
+    "priority": 100,
+    "client": "./src/client.tsx",
+    "server": "./src/server/index.ts",
+    "bridge": "./src/bridge/index.ts",
+    "claims": [
+      {
+        "slot": "settings-section",
+        "component": "MultiAccountSettings",
+        "tab": "providers"
+      }
+    ]
+  },
+  "dependencies": {
+    "pi-multi-account": "1.21.3",
+    "proper-lockfile": "4.1.2"
+  },
+  "peerDependencies": {
+    "@blackbelt-technology/dashboard-plugin-runtime": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "react": ">=19"
+  },
+  "devDependencies": {
+    "@blackbelt-technology/dashboard-plugin-runtime": "0.8.0",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@types/node": "^22.20.1",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
