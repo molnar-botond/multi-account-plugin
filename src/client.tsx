@@ -1,3 +1,4 @@
+import { useSettingsDraftSource } from "@blackbelt-technology/dashboard-plugin-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface EditableConfig {
@@ -107,15 +108,19 @@ export function MultiAccountSettings() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: "ok" | "error" | "info"; text: string } | null>(null);
   const alive = useRef(true);
+  const baseline = useRef<EditableConfig | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (rebaseDraft = true) => {
     const [next, sessionResponse] = await Promise.all([
       request<DashboardState>(`${API}/status`),
       request<SessionsResponse>("/api/sessions"),
     ]);
     if (!alive.current) return;
     setState(next);
-    setDraft(next.config);
+    if (rebaseDraft) {
+      baseline.current = next.config;
+      setDraft(next.config);
+    }
     setSessions(sessionResponse.success && Array.isArray(sessionResponse.data) ? sessionResponse.data : []);
   }, []);
 
@@ -131,7 +136,7 @@ export function MultiAccountSettings() {
     if (!selectedSession && activeSessions[0]) setSelectedSession(activeSessions[0].id);
   }, [activeSessions, selectedSession]);
 
-  const save = async () => {
+  const commit = useCallback(async () => {
     if (!draft) return;
     setBusy("save");
     setNotice(null);
@@ -141,21 +146,48 @@ export function MultiAccountSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       });
+      let reloaded = false;
       if (selectedSession) {
-        await request(`${API}/action`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: selectedSession, action: "reload" }),
-        });
+        try {
+          await request(`${API}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: selectedSession, action: "reload" }),
+          });
+          reloaded = true;
+        } catch {
+          // Configuration is already persisted; a disconnected session must not
+          // make the host Save bar report that persistence failed.
+        }
       }
-      await refresh();
-      setNotice({ kind: "ok", text: selectedSession ? "Saved and reloaded in the selected session." : "Saved. New sessions will use this configuration." });
+      await refresh(true);
+      setNotice({
+        kind: reloaded || !selectedSession ? "ok" : "info",
+        text: reloaded
+          ? "Saved and reloaded in the selected session."
+          : selectedSession
+            ? "Saved. The selected session was not connected; reload it manually."
+            : "Saved. New sessions will use this configuration.",
+      });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "Save failed" });
+      throw error;
     } finally {
       setBusy(null);
     }
-  };
+  }, [draft, refresh, selectedSession]);
+
+  const reset = useCallback(() => {
+    if (baseline.current) setDraft(baseline.current);
+    setNotice(null);
+  }, []);
+
+  useSettingsDraftSource({
+    id: "plugin:multi-account",
+    isDirty: Boolean(draft && baseline.current && JSON.stringify(draft) !== JSON.stringify(baseline.current)),
+    commit,
+    reset,
+  });
 
   const runAction = async (action: "next" | "rediscover" | "reload") => {
     if (!selectedSession) return;
@@ -168,7 +200,7 @@ export function MultiAccountSettings() {
         body: JSON.stringify({ sessionId: selectedSession, action }),
       });
       await new Promise((resolve) => setTimeout(resolve, 500));
-      await refresh();
+      await refresh(false);
       setNotice({ kind: "ok", text: `${action === "next" ? "Switched account" : "Command sent"}.` });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "Action failed" });
@@ -209,7 +241,7 @@ export function MultiAccountSettings() {
           (!previous?.authenticated || current.expires !== previous.expires);
         if (!changed) continue;
         if (selectedSession) await runAction("rediscover");
-        else await refresh();
+        else await refresh(false);
         setNotice({ kind: "ok", text: "Account added. Multi-account rotation was rediscovered." });
         return;
       }
@@ -255,7 +287,6 @@ export function MultiAccountSettings() {
             <span>Maximum automatic continuations</span>
             <input type="number" min={1} max={32} value={draft.maxAutoContinuesPerPrompt} onChange={(event) => setDraft({ ...draft, maxAutoContinuesPerPrompt: Number(event.target.value) })} />
           </label>
-          <button type="button" className="ma-primary" onClick={() => void save()} disabled={busy !== null}>{busy === "save" ? "Saving…" : "Save settings"}</button>
         </div>
 
         <div className="ma-panel">
@@ -270,7 +301,7 @@ export function MultiAccountSettings() {
           <div className="ma-actions">
             <button type="button" onClick={() => void runAction("next")} disabled={!selectedSession || busy !== null}>Use next account</button>
             <button type="button" onClick={() => void runAction("rediscover")} disabled={!selectedSession || busy !== null}>Rediscover</button>
-            <button type="button" onClick={() => void refresh()} disabled={busy !== null}>Refresh status</button>
+            <button type="button" onClick={() => void refresh(false)} disabled={busy !== null}>Refresh status</button>
           </div>
           <hr />
           <h4>Add subscription account</h4>
@@ -313,5 +344,5 @@ export function MultiAccountSettings() {
 }
 
 const styles = `
-.ma-root{display:grid;gap:16px;color:var(--text-primary);font-size:13px}.ma-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.ma-heading h3,.ma-panel h4,.ma-section-title h4,.ma-history h4{margin:0;font-weight:650}.ma-heading h3{font-size:16px}.ma-heading p,.ma-help,.ma-empty{margin:4px 0 0;color:var(--text-muted);line-height:1.45}.ma-badge,.ma-state{border:1px solid var(--border-secondary);border-radius:999px;padding:3px 8px;font-size:11px;text-transform:capitalize}.ma-badge.is-on,.ma-state.ready{color:var(--status-idle);background:color-mix(in srgb,var(--status-idle) 10%,transparent)}.ma-badge.is-off,.ma-state.invalid{color:var(--status-error);background:color-mix(in srgb,var(--status-error) 10%,transparent)}.ma-state.cooling{color:var(--status-working);background:color-mix(in srgb,var(--status-working) 10%,transparent)}.ma-notice{border:1px solid var(--border-primary);border-radius:8px;padding:9px 11px}.ma-notice.error{color:var(--status-error)}.ma-notice.ok{color:var(--status-idle)}.ma-notice.info{color:var(--text-secondary)}.ma-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ma-panel,.ma-account,.ma-history{border:1px solid var(--border-primary);border-radius:10px;background:var(--bg-tertiary);padding:12px}.ma-panel{display:grid;gap:11px}.ma-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px}.ma-toggle span{display:grid;gap:2px}.ma-toggle small,.ma-account small{display:block;color:var(--text-muted);font-weight:400}.ma-toggle input{width:18px;height:18px;accent-color:var(--accent-blue)}.ma-field{display:grid;gap:5px;color:var(--text-secondary)}.ma-field input,.ma-field select{min-height:36px;border:1px solid var(--border-secondary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);padding:6px 8px}.ma-actions{display:flex;flex-wrap:wrap;gap:7px}.ma-root button{min-height:36px;border:1px solid var(--border-secondary);border-radius:7px;padding:6px 10px;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer}.ma-root button:hover:not(:disabled){border-color:var(--text-muted)}.ma-root button:focus-visible,.ma-root input:focus-visible,.ma-root select:focus-visible{outline:2px solid var(--accent-blue);outline-offset:2px}.ma-root button:disabled{opacity:.5;cursor:not-allowed}.ma-primary{background:var(--accent-blue)!important;color:white!important;border-color:transparent!important}.ma-secondary{justify-self:start}.ma-panel hr{width:100%;border:0;border-top:1px solid var(--border-primary);margin:2px 0}.ma-section-title{display:flex;align-items:center;gap:7px}.ma-section-title span{color:var(--text-muted)}.ma-accounts{display:grid;gap:8px}.ma-account{display:grid;gap:8px}.ma-account-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.ma-window{display:grid;gap:4px}.ma-window-label{display:flex;justify-content:space-between;gap:12px;color:var(--text-muted);font-size:11px}.ma-window progress{width:100%;height:7px;accent-color:var(--accent-blue)}.ma-cooling{margin:0;color:var(--status-working);font-size:12px}.ma-history ol{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}.ma-history li{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;gap:7px;align-items:center;color:var(--text-secondary);font-size:11px}.ma-history time{color:var(--text-muted)}.ma-loading{color:var(--text-muted);padding:8px 0}@media(max-width:720px){.ma-grid{grid-template-columns:1fr}.ma-history li{grid-template-columns:1fr auto 1fr}.ma-history time{grid-column:1/-1}.ma-heading{align-items:center}.ma-window-label{align-items:flex-end}}
+.ma-root{display:grid;gap:16px;color:var(--text-primary);font-size:13px}.ma-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.ma-heading h3,.ma-panel h4,.ma-section-title h4,.ma-history h4{margin:0;font-weight:650}.ma-heading h3{font-size:16px}.ma-heading p,.ma-help,.ma-empty{margin:4px 0 0;color:var(--text-muted);line-height:1.45}.ma-badge,.ma-state{border:1px solid var(--border-secondary);border-radius:999px;padding:3px 8px;font-size:11px;text-transform:capitalize}.ma-badge.is-on,.ma-state.ready{color:var(--status-idle);background:color-mix(in srgb,var(--status-idle) 10%,transparent)}.ma-badge.is-off,.ma-state.invalid{color:var(--status-error);background:color-mix(in srgb,var(--status-error) 10%,transparent)}.ma-state.cooling{color:var(--status-working);background:color-mix(in srgb,var(--status-working) 10%,transparent)}.ma-notice{border:1px solid var(--border-primary);border-radius:8px;padding:9px 11px}.ma-notice.error{color:var(--status-error)}.ma-notice.ok{color:var(--status-idle)}.ma-notice.info{color:var(--text-secondary)}.ma-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ma-panel,.ma-account,.ma-history{border:1px solid var(--border-primary);border-radius:10px;background:var(--bg-tertiary);padding:12px}.ma-panel{display:grid;gap:11px}.ma-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px}.ma-toggle span{display:grid;gap:2px}.ma-toggle small,.ma-account small{display:block;color:var(--text-muted);font-weight:400}.ma-toggle input{width:18px;height:18px;accent-color:var(--accent-blue)}.ma-field{display:grid;gap:5px;color:var(--text-secondary)}.ma-field input,.ma-field select{min-height:36px;border:1px solid var(--border-secondary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);padding:6px 8px}.ma-actions{display:flex;flex-wrap:wrap;gap:7px}.ma-root button{min-height:36px;border:1px solid var(--border-secondary);border-radius:7px;padding:6px 10px;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer}.ma-root button:hover:not(:disabled){border-color:var(--text-muted)}.ma-root button:focus-visible,.ma-root input:focus-visible,.ma-root select:focus-visible{outline:2px solid var(--accent-blue);outline-offset:2px}.ma-root button:disabled{opacity:.5;cursor:not-allowed}.ma-secondary{justify-self:start}.ma-panel hr{width:100%;border:0;border-top:1px solid var(--border-primary);margin:2px 0}.ma-section-title{display:flex;align-items:center;gap:7px}.ma-section-title span{color:var(--text-muted)}.ma-accounts{display:grid;gap:8px}.ma-account{display:grid;gap:8px}.ma-account-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.ma-window{display:grid;gap:4px}.ma-window-label{display:flex;justify-content:space-between;gap:12px;color:var(--text-muted);font-size:11px}.ma-window progress{width:100%;height:7px;accent-color:var(--accent-blue)}.ma-cooling{margin:0;color:var(--status-working);font-size:12px}.ma-history ol{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}.ma-history li{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;gap:7px;align-items:center;color:var(--text-secondary);font-size:11px}.ma-history time{color:var(--text-muted)}.ma-loading{color:var(--text-muted);padding:8px 0}@media(max-width:720px){.ma-grid{grid-template-columns:1fr}.ma-history li{grid-template-columns:1fr auto 1fr}.ma-history time{grid-column:1/-1}.ma-heading{align-items:center}.ma-window-label{align-items:flex-end}}
 `;

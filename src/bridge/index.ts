@@ -6,7 +6,5 @@ import activateMultiAccount from "pi-multi-account";
  * request or credential logic; it only supplies a settings surface.
  */
 export default async function activate(pi: ExtensionAPI): Promise<void> {
-  const alreadyLoaded = pi.getCommands().some((command) => command.name === "multi-account");
-  if (alreadyLoaded) return;
   await activateMultiAccount(pi);
 }
